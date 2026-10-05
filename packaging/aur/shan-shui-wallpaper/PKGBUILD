@@ -9,8 +9,9 @@ pkgdesc='Endless Chinese landscape painting that slowly scrolls across your Wayl
 arch=('x86_64' 'aarch64')
 url='https://github.com/EldinBegano/shan-shui-wallpaper'
 license=('MIT')
-depends=('gcc-libs' 'glibc')
+depends=('glibc' 'libgcc')
 makedepends=('cargo')
+options=('!debug')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('SKIP')
 
