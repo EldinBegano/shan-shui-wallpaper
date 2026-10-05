@@ -3,7 +3,7 @@
 # pkgver is rewritten from the release tag, and checksums by updpkgsums, by
 # packaging/aur/publish.sh on every release.
 pkgname=shan-shui-wallpaper
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
 pkgdesc='Endless Chinese landscape painting that slowly scrolls across your Wayland desktop'
 arch=('x86_64' 'aarch64')
