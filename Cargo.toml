@@ -2,6 +2,10 @@
 name = "shan-shui-wallpaper"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
+description = "Endless Chinese landscape painting that slowly scrolls across your Wayland desktop"
+license = "MIT"
+repository = "https://github.com/EldinBegano/shan-shui-wallpaper"
 
 [dependencies]
 libc = "0.2.189"

@@ -1,0 +1,92 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  # Re-publish an existing tag to the AUR without recreating the GitHub release,
+  # e.g. after fixing the PKGBUILD or when the first AUR push failed.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to publish to the AUR, e.g. v0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches Cargo.toml
+        run: |
+          crate=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          if [ "v$crate" != "$TAG" ]; then
+            echo "::error::tag $TAG does not match Cargo.toml version $crate"
+            exit 1
+          fi
+
+      - name: Build and test
+        run: cargo test --locked --release
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$TAG" --verify-tag --generate-notes
+
+  aur:
+    needs: release
+    # Runs after a successful release, or alone on a manual dispatch (where
+    # release is skipped). Pre-release tags (v0.2.0-rc1) are not published:
+    # "-" is not allowed in an Arch pkgver.
+    if: ${{ !cancelled() && needs.release.result != 'failure' && !contains(github.event.inputs.tag || github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - name: Install packaging tools
+        run: pacman -Syu --noconfirm --needed git openssh pacman-contrib namcap rust
+
+      - uses: actions/checkout@v4
+
+      - name: Prepare builder user and AUR SSH access
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$AUR_SSH_KEY" ]; then
+            echo "::error::AUR_SSH_KEY secret is not set"
+            exit 1
+          fi
+          useradd -m builder
+          install -d -m 700 -o builder -g builder /home/builder/.ssh
+          umask 077
+          printf '%s\n' "$AUR_SSH_KEY" > /home/builder/.ssh/aur
+
+          # Trust only the AUR host key published on https://aur.archlinux.org
+          ssh-keyscan -t ed25519 aur.archlinux.org > /tmp/aur_host
+          ssh-keygen -lf /tmp/aur_host | grep -q 'SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4'
+          install -m 600 /tmp/aur_host /home/builder/.ssh/known_hosts
+          chown builder:builder /home/builder/.ssh/aur /home/builder/.ssh/known_hosts
+
+      - name: Publish shan-shui-wallpaper to the AUR
+        run: |
+          set -euo pipefail
+          ver="${TAG#v}"
+          chmod -R a+rX "$GITHUB_WORKSPACE"
+          su builder -c "
+            set -euo pipefail
+            git config --global user.name 'github-actions[bot]'
+            git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            cd '$GITHUB_WORKSPACE'
+            packaging/aur/publish.sh shan-shui-wallpaper '$ver' --push
+          "

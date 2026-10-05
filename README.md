@@ -11,6 +11,14 @@ shapes as the web version: a seed paints the same landscape in both
 difference: the original's modern easter eggs, the "Pizza Hut" sign and the
 power-line pylons, are left out, so `--dump` lacks those shapes.
 
+## Installing
+
+Arch Linux, from the [AUR](https://aur.archlinux.org/packages/shan-shui-wallpaper):
+
+```sh
+yay -S shan-shui-wallpaper
+```
+
 ## Running
 
 ```sh
@@ -51,3 +59,17 @@ SHAN_SHUI_DEBUG=1 shan-shui-wallpaper                  # log every commit
   aren't handled yet. When that output goes away (unplugged, or disabled when
   the lid closes), the landscape moves on to the output the compositor picks
   next.
+
+## Releasing
+
+Bump `version` in `Cargo.toml`, commit, then tag and push:
+
+```sh
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+`.github/workflows/release.yml` checks the tag against `Cargo.toml`, runs the
+tests, creates the GitHub release and publishes the AUR package through
+`packaging/aur/publish.sh`. It needs the AUR SSH private key in the
+`AUR_SSH_KEY` repository secret. `packaging/aur/publish.sh shan-shui-wallpaper
+<version>` without `--push` builds and checks the package locally.
