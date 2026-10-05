@@ -18,7 +18,13 @@ use smithay_client_toolkit::{
             globals::registry_queue_init,
             protocol::{wl_buffer, wl_output, wl_shm, wl_surface},
         },
-        protocols::wp::viewporter::client::{wp_viewport::WpViewport, wp_viewporter::WpViewporter},
+        protocols::wp::{
+            fractional_scale::v1::client::{
+                wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1,
+                wp_fractional_scale_v1::{self, WpFractionalScaleV1},
+            },
+            viewporter::client::{wp_viewport::WpViewport, wp_viewporter::WpViewporter},
+        },
     },
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
@@ -34,6 +40,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 const PIECES: i64 = 3;
+const RECREATE_DELAY: Duration = Duration::from_millis(500);
 
 struct Buf {
     wl: wl_buffer::WlBuffer,
@@ -42,9 +49,12 @@ struct Buf {
     busy: bool,
 }
 
+// w, h are buffer pixels; dw, dh the surface size they are shown at.
 struct Screen {
     w: u32,
     h: u32,
+    dw: u32,
+    dh: u32,
     piece_w: u32,
     zoom: f64,
 }
@@ -64,18 +74,39 @@ impl Screen {
     }
 }
 
+struct Surface {
+    layer: LayerSurface,
+    viewport: WpViewport,
+    scale: Option<WpFractionalScaleV1>,
+}
+
+impl Surface {
+    fn destroy(self) {
+        self.viewport.destroy();
+        if let Some(s) = self.scale {
+            s.destroy();
+        }
+    }
+}
+
 struct App {
     registry_state: RegistryState,
     output_state: OutputState,
+    compositor: CompositorState,
+    layer_shell: LayerShell,
     shm: Shm,
-    layer: LayerSurface,
-    viewport: WpViewport,
+    viewporter: WpViewporter,
+    fractional: Option<WpFractionalScaleManagerV1>,
     qh: QueueHandle<App>,
     handle: LoopHandle<'static, App>,
 
     speed: f64,
     interval: Duration,
 
+    surface: Option<Surface>,
+    size: (u32, u32),
+    scale: u32,
+    scale_known: bool,
     screen: Option<Screen>,
     pool: Option<RawPool>,
     bufs: Vec<Buf>,
@@ -108,18 +139,7 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let layer_shell = LayerShell::bind(&globals, &qh)?;
     let shm = Shm::bind(&globals, &qh)?;
     let viewporter: WpViewporter = globals.bind(&qh, 1..=1, Proto).map_err(|e| format!("wp_viewporter: {e}"))?;
-
-    let surface = compositor.create_surface(&qh);
-    let viewport = viewporter.get_viewport(&surface, &qh, Proto);
-    let region = Region::new(&compositor)?;
-    surface.set_input_region(Some(region.wl_region()));
-
-    let layer = layer_shell.create_layer_surface(&qh, surface, Layer::Background, Some("shan-shui"), None);
-    layer.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
-    layer.set_exclusive_zone(-1);
-    layer.set_keyboard_interactivity(KeyboardInteractivity::None);
-    layer.set_size(0, 0);
-    layer.commit();
+    let fractional: Option<WpFractionalScaleManagerV1> = globals.bind(&qh, 1..=1, Proto).ok();
 
     let mut event_loop: EventLoop<'static, App> = EventLoop::try_new()?;
     let handle = event_loop.handle();
@@ -138,13 +158,19 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let mut app = App {
         registry_state: RegistryState::new(&globals),
         output_state: OutputState::new(&globals, &qh),
+        compositor,
+        layer_shell,
         shm,
-        layer,
-        viewport,
+        viewporter,
+        fractional,
         qh,
         handle,
         speed: args.speed,
         interval: Duration::from_secs_f64(1.0 / args.fps),
+        surface: None,
+        size: (0, 0),
+        scale: 120,
+        scale_known: false,
         screen: None,
         pool: None,
         bufs: Vec::new(),
@@ -165,6 +191,7 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
         debug: std::env::var_os("SHAN_SHUI_DEBUG").is_some(),
         exit: false,
     };
+    app.create_surface();
     while !app.exit {
         event_loop.dispatch(None, &mut app)?;
     }
@@ -172,20 +199,95 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
 }
 
 impl App {
-    fn configure(&mut self, w: u32, h: u32) {
-        if w == 0 || h == 0 {
+    fn create_surface(&mut self) {
+        if self.surface.is_some() || self.output_state.outputs().next().is_none() {
             return;
         }
+        let qh = &self.qh;
+        let surface = self.compositor.create_surface(qh);
+        let viewport = self.viewporter.get_viewport(&surface, qh, Proto);
+        let scale = self.fractional.as_ref().map(|f| f.get_fractional_scale(&surface, qh, Proto));
+        match Region::new(&self.compositor) {
+            Ok(region) => surface.set_input_region(Some(region.wl_region())),
+            Err(e) => eprintln!("input region: {e}"),
+        }
+
+        let layer = self.layer_shell.create_layer_surface(qh, surface, Layer::Background, Some("shan-shui"), None);
+        layer.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
+        layer.set_exclusive_zone(-1);
+        layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+        layer.set_size(0, 0);
+        layer.commit();
+        self.surface = Some(Surface { layer, viewport, scale });
+        self.scale_known = false;
+    }
+
+    // The compositor closes the surface when its output goes away (unplugged, or disabled
+    // when the lid closes). Carry on at the same place on whichever output it picks next.
+    fn surface_closed(&mut self) {
+        if let Some(s) = self.surface.take() {
+            s.destroy();
+        }
+        if let Some(s) = self.screen.take() {
+            self.world_x = self.offset / s.zoom;
+        }
+        self.shown = None;
+        self.frame_pending = false;
+        self.clock = None;
+        let _ = self.handle.insert_source(Timer::from_duration(RECREATE_DELAY), |_, _, app: &mut App| {
+            app.create_surface();
+            TimeoutAction::Drop
+        });
+    }
+
+    fn configure(&mut self, w: u32, h: u32) {
+        self.size = (w, h);
+        if !self.scale_known
+            && let Some(s) = self.guess_scale(w, h)
+        {
+            self.scale = s;
+        }
+        self.resize();
+    }
+
+    // Hyprland only sends the preferred scale once something is shown; until then take it
+    // from the output whose logical size matches the surface, instead of painting twice.
+    fn guess_scale(&self, w: u32, h: u32) -> Option<u32> {
+        self.output_state.outputs().filter_map(|o| self.output_state.info(&o)).find_map(|i| {
+            let (lw, lh) = i.logical_size?;
+            let (mw, mh) = i.modes.iter().find(|m| m.current)?.dimensions;
+            let (l, m) = (lw.max(lh) as u32, mw.max(mh) as u32);
+            ((lw, lh) == (w as i32, h as i32) && l > 0).then(|| (m * 120 + l / 2) / l)
+        })
+    }
+
+    fn set_scale(&mut self, scale: u32) {
+        self.scale_known = true;
+        if self.scale != scale {
+            self.scale = scale;
+            self.resize();
+        }
+    }
+
+    fn resize(&mut self) {
+        let (dw, dh) = self.size;
+        if dw == 0 || dh == 0 {
+            return;
+        }
+        let px = |v: u32| ((v as u64 * self.scale as u64 + 60) / 120) as u32;
+        let (w, h) = (px(dw), px(dh));
         if let Some(s) = &self.screen
-            && s.w == w
-            && s.h == h
+            && (s.w, s.h, s.dw, s.dh) == (w, h, dw, dh)
         {
             return;
         }
         if let Some(s) = &self.screen {
             self.world_x = self.offset / s.zoom;
         }
-        let screen = Screen { w, h, piece_w: w.div_ceil(2), zoom: h as f64 / WORLD_HEIGHT };
+        if self.debug {
+            eprintln!("resize {dw}x{dh} at scale {} -> buffer {w}x{h}", self.scale as f64 / 120.0);
+        }
+        let screen = Screen { w, h, dw, dh, piece_w: w.div_ceil(2), zoom: h as f64 / WORLD_HEIGHT };
         self.offset = self.world_x * screen.zoom;
 
         for b in self.bufs.drain(..) {
@@ -312,8 +414,10 @@ impl App {
         if self.frame_pending {
             return;
         }
-        let Some(s) = &self.screen else { return };
-        let (w, h, pw) = (s.w, s.h, s.piece_w as i64);
+        let (Some(s), Some(surf)) = (&self.screen, &self.surface) else { return };
+        let (w, h, dw, dh, pw) = (s.w, s.h, s.dw, s.dh, s.piece_w as i64);
+        let (surface, viewport) = (surf.layer.wl_surface().clone(), surf.viewport.clone());
+        let speed = self.speed * self.scale as f64 / 120.0;
         let now = Instant::now();
 
         let mut attach = None;
@@ -331,7 +435,7 @@ impl App {
         self.stalled = false;
         if self.shown.is_some() {
             let dt = self.clock.map_or(0.0, |t| (now - t).as_secs_f64().min(0.1));
-            self.offset += self.speed * dt;
+            self.offset += speed * dt;
             if self.offset >= ((k + 1) * pw) as f64 {
                 let idle = (0..self.bufs.len()).find(|&i| Some(i) != self.shown).unwrap();
                 if self.bufs[idle].k == Some(k + 1) {
@@ -347,29 +451,28 @@ impl App {
 
         let px = self.offset.floor() as i64;
         if attach.is_none() && Some(px) == self.last_px {
-            if self.speed > 0.0 && !self.stalled {
-                let wait = ((px + 1) as f64 - self.offset) / self.speed;
+            if speed > 0.0 && !self.stalled {
+                let wait = ((px + 1) as f64 - self.offset) / speed;
                 self.arm_tick(Duration::from_secs_f64(wait.max(0.001)));
             }
             return;
         }
 
-        let surface = self.layer.wl_surface().clone();
         if let Some(b) = attach {
             surface.attach(Some(&self.bufs[b].wl), 0, 0);
             surface.damage_buffer(0, 0, i32::MAX, i32::MAX);
             self.bufs[b].busy = true;
             self.shown = Some(b);
         } else {
-            surface.damage(0, 0, w as i32, h as i32);
+            surface.damage(0, 0, dw as i32, dh as i32);
         }
-        self.viewport.set_source((px - k * pw) as f64, 0.0, w as f64, h as f64);
-        self.viewport.set_destination(w as i32, h as i32);
-        if self.speed > 0.0 {
+        viewport.set_source((px - k * pw) as f64, 0.0, w as f64, h as f64);
+        viewport.set_destination(dw as i32, dh as i32);
+        if speed > 0.0 {
             surface.frame(&self.qh, FrameCallbackData(surface.clone()));
             self.frame_pending = true;
         }
-        self.layer.commit();
+        surface.commit();
         self.last_commit = Some(now);
         self.last_px = Some(px);
         if self.debug {
@@ -384,7 +487,11 @@ impl App {
 }
 
 impl CompositorHandler for App {
-    fn scale_factor_changed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: i32) {}
+    fn scale_factor_changed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, factor: i32) {
+        if self.fractional.is_none() {
+            self.set_scale(factor.max(1) as u32 * 120);
+        }
+    }
     fn transform_changed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: wl_output::Transform) {}
     fn surface_enter(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: &wl_output::WlOutput) {}
     fn surface_leave(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: &wl_output::WlOutput) {}
@@ -403,14 +510,16 @@ impl OutputHandler for App {
     fn output_state(&mut self) -> &mut OutputState {
         &mut self.output_state
     }
-    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {
+        self.create_surface();
+    }
     fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
     fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
 }
 
 impl LayerShellHandler for App {
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &LayerSurface) {
-        self.exit = true;
+        self.surface_closed();
     }
 
     fn configure(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &LayerSurface, c: LayerSurfaceConfigure, _: u32) {
@@ -455,6 +564,18 @@ impl Dispatch2<WpViewporter, App> for Proto {
 
 impl Dispatch2<WpViewport, App> for Proto {
     fn event(&self, _: &mut App, _: &WpViewport, _: <WpViewport as Proxy>::Event, _: &Connection, _: &QueueHandle<App>) {}
+}
+
+impl Dispatch2<WpFractionalScaleManagerV1, App> for Proto {
+    fn event(&self, _: &mut App, _: &WpFractionalScaleManagerV1, _: <WpFractionalScaleManagerV1 as Proxy>::Event, _: &Connection, _: &QueueHandle<App>) {}
+}
+
+impl Dispatch2<WpFractionalScaleV1, App> for Proto {
+    fn event(&self, app: &mut App, _: &WpFractionalScaleV1, ev: wp_fractional_scale_v1::Event, _: &Connection, _: &QueueHandle<App>) {
+        if let wp_fractional_scale_v1::Event::PreferredScale { scale } = ev {
+            app.set_scale(scale);
+        }
+    }
 }
 
 delegate_registry!(App);

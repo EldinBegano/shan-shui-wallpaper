@@ -48,5 +48,6 @@ SHAN_SHUI_DEBUG=1 shan-shui-wallpaper                  # log every commit
 ## Limitations
 
 - One surface, on the output the compositor picks; multi-monitor setups
-  aren't handled yet.
-- Renders at scale 1; on HiDPI outputs it is upscaled by the compositor.
+  aren't handled yet. When that output goes away (unplugged, or disabled when
+  the lid closes), the landscape moves on to the output the compositor picks
+  next.
