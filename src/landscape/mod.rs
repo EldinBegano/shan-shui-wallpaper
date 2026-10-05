@@ -32,20 +32,11 @@ pub fn ink(a: f64) -> Col {
     rgba(100, 100, 100, a)
 }
 
-pub struct Label {
-    pub text: &'static str,
-    pub x: f64,
-    pub y: f64,
-    pub size: f64,
-    pub ang: f64,
-}
-
 pub struct Shape {
     pub pts: Vec<Pt>,
     pub fil: Col,
     pub str: Col,
     pub wid: f64,
-    pub label: Option<Box<Label>>,
 }
 
 pub type Canv = Vec<Shape>;
@@ -197,17 +188,6 @@ pub fn poly(plist: &[Pt], a: PolyArgs) -> Shape {
         fil,
         str: a.str.unwrap_or(fil),
         wid: a.wid,
-        label: None,
-    }
-}
-
-pub fn label(text: &'static str, x: f64, y: f64, size: f64, ang: f64, fil: Col) -> Shape {
-    Shape {
-        pts: Vec::new(),
-        fil,
-        str: NONE,
-        wid: 0.0,
-        label: Some(Box::new(Label { text, x, y, size, ang })),
     }
 }
 

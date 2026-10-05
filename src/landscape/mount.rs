@@ -250,7 +250,12 @@ pub fn mountain(ctx: &mut Ctx, xoff: f64, yoff: f64, seed: f64) -> Canv {
         ctx,
         &mut canv,
         pl,
-        &mut |ctx, x, y| arch::transmission_tower01(ctx, x + xoff, y + yoff),
+        // The web version stands power-line pylons here. They are left out, but still
+        // drawn and thrown away so a seed paints the same landscape around them.
+        &mut |ctx, x, y| {
+            arch::transmission_tower01(ctx, x + xoff, y + yoff);
+            Canv::new()
+        },
         &|ctx, i, j| {
             let ns = ctx.noise(i as f64 * 0.2, j as f64 * 0.05, seed + 20.0 * PI);
             i % 2 == 0 && (j == 1 || j == pl[i].len() - 2) && ns * ns * ns * ns < 0.002

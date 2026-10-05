@@ -7,7 +7,9 @@ as a wlr-layer-shell background surface (Hyprland, Sway, river, KDE, ...).
 
 The generator is ported statement by statement and produces exactly the same
 shapes as the web version: a seed paints the same landscape in both
-(`--dump` output is checked against the JavaScript for several seeds).
+(`--dump` output is checked against the JavaScript for several seeds). The one
+difference: the original's modern easter eggs, the "Pizza Hut" sign and the
+power-line pylons, are left out, so `--dump` lacks those shapes.
 
 ## Running
 

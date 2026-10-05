@@ -1,7 +1,6 @@
 use super::man::{self, Hat, Item, ManArgs};
 use super::*;
 use crate::js;
-use std::f64::consts::PI;
 
 fn hut(ctx: &mut Ctx, xoff: f64, yoff: f64, hei: f64, wid: f64) -> Canv {
     let tex = 300.0;
@@ -228,11 +227,10 @@ struct RoofArgs {
     per: f64,
     cor: f64,
     wei: f64,
-    pla: Option<&'static str>,
 }
 
 fn roof(ctx: &mut Ctx, xoff: f64, yoff: f64, a: RoofArgs) -> Canv {
-    let RoofArgs { hei, wid, rot, per, cor, wei, pla } = a;
+    let RoofArgs { hei, wid, rot, per, cor, wei } = a;
     let f = rot < 0.5;
     let rrot = if rot < 0.5 { 1.0 - rot } else { rot };
     let mid = -wid * 0.5 + wid * rrot;
@@ -253,17 +251,6 @@ fn roof(ctx: &mut Ctx, xoff: f64, yoff: f64, a: RoofArgs) -> Canv {
     for p in &ptlist {
         let pts = offset(p, xoff, yoff);
         canv.extend(stroke(ctx, &pts, StrokeArgs { col: Some(ink(0.4)), noi: Some(1.0), wid: Some(wei), fun: Some(&one), ..Default::default() }));
-    }
-
-    if let Some(text) = pla {
-        let mut pp = flip_if(f, vec![[mid + quat / 2.0, -hei / 2.0 + per / 2.0], [-wid * 0.5 + quat * 0.5, -hei / 2.0 - per / 4.0]]);
-        if pp[0][0] > pp[1][0] {
-            pp.swap(0, 1);
-        }
-        let mp = mid_pt(&pp);
-        let a = (pp[1][1] - pp[0][1]).atan2(pp[1][0] - pp[0][0]);
-        let adeg = (a * 180.0) / PI;
-        canv.push(label(text, mp[0] + xoff, mp[1] + yoff, hei * 0.6, adeg, ink(0.9)));
     }
     canv
 }
@@ -357,12 +344,13 @@ pub fn arch02(ctx: &mut Ctx, xoff: f64, yoff: f64, a: Arch02Args) -> Canv {
     while i < sto {
         let bw = wid * 0.85f64.powf(i);
         canv.extend(box_(ctx, xoff, yoff - hoff, BoxArgs { tra: false, hei, wid: bw, rot, wei: 1.5, per, dec: Some(&dec), ..Default::default() }));
-        let mut pla = None;
-        if sto == 1.0 && ctx.rand() < 1.0 / 3.0 {
-            pla = Some("Pizza Hut");
+        // The web version hangs a "Pizza Hut" sign on a third of these; the sign is
+        // left out, but its draw is kept so a seed still paints the same landscape.
+        if sto == 1.0 {
+            ctx.rand();
         }
         let rw = wid * 0.9f64.powf(i);
-        canv.extend(roof(ctx, xoff, yoff - hoff - hei, RoofArgs { hei, wid: rw, rot, wei: 1.5, per, cor: 5.0, pla }));
+        canv.extend(roof(ctx, xoff, yoff - hoff - hei, RoofArgs { hei, wid: rw, rot, wei: 1.5, per, cor: 5.0 }));
         hoff += hei * 1.5;
         i += 1.0;
     }

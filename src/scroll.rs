@@ -1,5 +1,5 @@
 use crate::landscape::world::{Chunk, World, insert_chunk};
-use crate::render::{self, Font, Paper, RChunk};
+use crate::render::{self, Paper, RChunk};
 use smithay_client_toolkit::reexports::calloop::channel;
 use std::collections::VecDeque;
 use std::sync::mpsc;
@@ -38,7 +38,6 @@ pub fn spawn(seed: String, out: channel::Sender<Piece>) -> mpsc::Sender<Request>
             let mut chunks: Vec<RChunk> = Vec::new();
             let mut started = false;
             let paper = Paper::new();
-            let font = Font::find();
             let mut queue: VecDeque<Request> = VecDeque::new();
             loop {
                 if queue.is_empty() {
@@ -64,7 +63,7 @@ pub fn spawn(seed: String, out: channel::Sender<Piece>) -> mpsc::Sender<Request>
                 chunks.retain(|c| c.x1 >= req.keep_from);
 
                 let mut data = vec![0u8; g.piece_w as usize * g.h as usize * 4];
-                render::paint(&chunks, g.zoom, px0, g.piece_w, g.h, &paper, font.as_ref(), &mut data);
+                render::paint(&chunks, g.zoom, px0, g.piece_w, g.h, &paper, &mut data);
                 if out.send(Piece { epoch, index: req.index, data }).is_err() {
                     return;
                 }

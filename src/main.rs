@@ -35,18 +35,6 @@ fn col_str(c: Col) -> String {
 fn chunk_svg(canv: &[Shape]) -> String {
     let mut out = String::new();
     for s in canv {
-        if let Some(l) = &s.label {
-            out += &format!(
-                "<text font-size='{}' font-family='Verdana' style='fill:{}' text-anchor='middle' transform='translate({},{}) rotate({})'>{}</text>",
-                js::num_str(l.size),
-                col_str(s.fil),
-                js::num_str(l.x),
-                js::num_str(l.y),
-                js::num_str(l.ang),
-                l.text
-            );
-            continue;
-        }
         out += "<polyline points='";
         for p in &s.pts {
             out += &format!(" {},{}", js::to_fixed_str(p[0], 1), js::to_fixed_str(p[1], 1));
@@ -95,10 +83,9 @@ fn bench(seed: &str) {
     world.chunkloader(0.0, 3000.0, &mut |c| insert_chunk(&mut chunks, render::RChunk::new(c), |c| c.y));
     println!("generate first view: {:?}", t.elapsed());
     let paper = render::Paper::new();
-    let font = render::Font::find();
     let mut out = vec![0u8; w * h * 4];
     let t = std::time::Instant::now();
-    render::paint(&chunks, zoom, 0.0, w as u32, h as u32, &paper, font.as_ref(), &mut out);
+    render::paint(&chunks, zoom, 0.0, w as u32, h as u32, &paper, &mut out);
     println!("paint {w}x{h}: {:?}", t.elapsed());
     let mem: usize = chunks.iter().map(|c| c.mem_bytes()).sum();
     println!("chunk memory for {} chunks: {:.1} MB", chunks.len(), mem as f64 / 1e6);
@@ -137,7 +124,7 @@ fn png(args: &Args) {
     let right = x + w as f64 / zoom + scroll::LOOKAHEAD;
     world.chunkloader(x.max(0.0), right, &mut |c| insert_chunk(&mut chunks, render::RChunk::new(c), |c| c.y));
     let mut out = vec![0u8; w * h * 4];
-    render::paint(&chunks, zoom, x * zoom, w as u32, h as u32, &render::Paper::new(), render::Font::find().as_ref(), &mut out);
+    render::paint(&chunks, zoom, x * zoom, w as u32, h as u32, &render::Paper::new(), &mut out);
     let mut pm = tiny_skia::Pixmap::new(w as u32, h as u32).unwrap();
     for (d, s) in pm.data_mut().chunks_exact_mut(4).zip(out.chunks_exact(4)) {
         d.copy_from_slice(&[s[2], s[1], s[0], 255]);
