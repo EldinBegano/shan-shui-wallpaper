@@ -337,9 +337,10 @@ impl App {
             None => self.step(),
         };
         let keep_from = k as f64 * s.piece_w as f64 / s.zoom;
-        while self.requested < k + PIECES {
-            self.requested += 1;
-            let req = Request { epoch: self.epoch, index: self.requested, geo: s.geometry(), keep_from };
+        let last = k + PIECES;
+        if self.requested < last {
+            let req = Request { epoch: self.epoch, pieces: self.requested + 1..last + 1, geo: s.geometry(), keep_from };
+            self.requested = last;
             if self.painter.send(req).is_err() {
                 self.exit = true;
             }
